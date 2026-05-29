@@ -277,7 +277,8 @@ s = {}
 if not df_summary.empty:
     row = df_summary.iloc[0]
     for col in ["total_orders", "unique_customers", "total_revenue", "avg_order_value", "total_units_sold", "unique_products"]:
-        s[col] = pd.to_numeric(row.get(col, 0), errors="coerce") or 0
+        val = pd.to_numeric(row.get(col, 0), errors="coerce")
+        s[col] = 0 if pd.isna(val) else val
 
 
 # ══════════════════════════════════════════════════════════════════════════════
