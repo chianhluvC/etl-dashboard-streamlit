@@ -4,18 +4,19 @@ pip install streamlit requests pandas plotly
 ATHENA_API_URL=getonAWS streamlit run streamlit_app.py
 """
 
-import os, requests, json
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import requests
 import streamlit as st
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Config & page setup
 # ══════════════════════════════════════════════════════════════════════════════
-import streamlit as st
-
-API_URL = st.secrets["API_URL"].rstrip("/")
+API_URL = os.environ.get("ATHENA_API_URL", "your-api-url").rstrip("/")
 
 st.set_page_config(
     page_title="Retail Intelligence",
@@ -25,7 +26,8 @@ st.set_page_config(
 )
 
 # ── Custom CSS ─────────────────────────────────────────────────────────────────
-st.markdown("""
+st.markdown(
+    """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@300;400;500;600&display=swap');
 
@@ -90,14 +92,15 @@ div[aria-selected="true"] { color: #0f172a !important; border-bottom: 2px solid 
     line-height: 1.6;
 }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Sidebar
 # ══════════════════════════════════════════════════════════════════════════════
 with st.sidebar:
-
     st.title("📊 Retail Intelligence")
 
     st.caption("Sales analytics dashboard powered by Athena")
@@ -111,7 +114,6 @@ with st.sidebar:
 
     # Hidden API config
     with st.expander("🔐 Advanced API Settings"):
-
         api_input = st.text_input(
             "API Gateway Endpoint",
             value=API_URL,
@@ -170,7 +172,6 @@ with st.sidebar:
     # st.caption("Data refreshes automatically after cache expiration.")
 
 
-    
 # ══════════════════════════════════════════════════════════════════════════════
 # API helper
 # ══════════════════════════════════════════════════════════════════════════════
@@ -182,6 +183,7 @@ def call_api(action: str, **kwargs) -> list[dict]:
     r = requests.post(url, json={"action": action, **kwargs}, timeout=60)
     r.raise_for_status()
     return r.json().get("data", [])
+
 
 def to_num(df: pd.DataFrame, cols: list) -> pd.DataFrame:
     for c in cols:
@@ -196,21 +198,30 @@ def to_num(df: pd.DataFrame, cols: list) -> pd.DataFrame:
 def load_summary():
     return pd.DataFrame(call_api("summary"))
 
+
 def load_revenue_by_country():
     df = pd.DataFrame(call_api("revenue_by_country"))
     return to_num(df, ["total_orders", "unique_customers", "total_revenue"])
+
 
 def load_top_products(n):
     df = pd.DataFrame(call_api("top_products", limit=n))
     return to_num(df, ["times_ordered", "total_qty", "total_revenue", "avg_price"])
 
+
 def load_monthly_trend():
     df = pd.DataFrame(call_api("monthly_trend"))
-    return to_num(df, ["total_orders", "unique_customers", "total_revenue", "avg_unit_price"])
+    return to_num(
+        df, ["total_orders", "unique_customers", "total_revenue", "avg_unit_price"]
+    )
+
 
 def load_customer_behavior(n):
     df = pd.DataFrame(call_api("customer_behavior", limit=n))
-    return to_num(df, ["order_frequency", "total_units", "total_spend", "avg_order_value"])
+    return to_num(
+        df, ["order_frequency", "total_units", "total_spend", "avg_order_value"]
+    )
+
 
 def load_spend_distribution():
     df = pd.DataFrame(call_api("spend_distribution"))
@@ -228,7 +239,7 @@ def load_spend_distribution():
 #
 # Sequential: ~30s (6 x 5s)  |  Parallel: ~8s (bottleneck = slowest query)
 # ──────────────────────────────────────────────────────────────────────────────
-from concurrent.futures import ThreadPoolExecutor, as_completed
+
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _load_all_cached(top_n: int, cust_limit: int) -> dict:
@@ -237,11 +248,11 @@ def _load_all_cached(top_n: int, cust_limit: int) -> dict:
     Cache hit  -> return instantly, zero API calls.
     """
     tasks = {
-        "summary":    lambda: load_summary(),
-        "country":    lambda: load_revenue_by_country(),
-        "products":   lambda: load_top_products(top_n),
-        "trend":      lambda: load_monthly_trend(),
-        "customers":  lambda: load_customer_behavior(cust_limit),
+        "summary": lambda: load_summary(),
+        "country": lambda: load_revenue_by_country(),
+        "products": lambda: load_top_products(top_n),
+        "trend": lambda: load_monthly_trend(),
+        "customers": lambda: load_customer_behavior(cust_limit),
         "spend_dist": lambda: load_spend_distribution(),
     }
     results = {}
@@ -263,22 +274,29 @@ def _load_all_cached(top_n: int, cust_limit: int) -> dict:
 
     return results
 
+
 with st.spinner("Loading data from Athena…"):
-    _data         = _load_all_cached(top_n, cust_limit)
-    df_summary    = _data["summary"]
-    df_country    = _data["country"]
-    df_products   = _data["products"]
-    df_trend      = _data["trend"]
-    df_customers  = _data["customers"]
+    _data = _load_all_cached(top_n, cust_limit)
+    df_summary = _data["summary"]
+    df_country = _data["country"]
+    df_products = _data["products"]
+    df_trend = _data["trend"]
+    df_customers = _data["customers"]
     df_spend_dist = _data["spend_dist"]
 
 # coerce summary row
 s = {}
 if not df_summary.empty:
     row = df_summary.iloc[0]
-    for col in ["total_orders", "unique_customers", "total_revenue", "avg_order_value", "total_units_sold", "unique_products"]:
-        val = pd.to_numeric(row.get(col, 0), errors="coerce")
-        s[col] = 0 if pd.isna(val) else val
+    for col in [
+        "total_orders",
+        "unique_customers",
+        "total_revenue",
+        "avg_order_value",
+        "total_units_sold",
+        "unique_products",
+    ]:
+        s[col] = pd.to_numeric(row.get(col, 0), errors="coerce") or 0
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -288,12 +306,12 @@ st.markdown("# Retail Intelligence")
 
 
 c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.metric("Total Revenue",     f"${s.get('total_revenue', 0):,.0f}")
-c2.metric("Total Orders",      f"{s.get('total_orders', 0):,.0f}")
-c3.metric("Unique Customers",  f"{s.get('unique_customers', 0):,.0f}")
-c4.metric("Avg Order Value",   f"${s.get('avg_order_value', 0):,.2f}")
-c5.metric("Units Sold",        f"{s.get('total_units_sold', 0):,.0f}")
-c6.metric("Unique Products",   f"{s.get('unique_products', 0):,.0f}")
+c1.metric("Total Revenue", f"${s.get('total_revenue', 0):,.0f}")
+c2.metric("Total Orders", f"{s.get('total_orders', 0):,.0f}")
+c3.metric("Unique Customers", f"{s.get('unique_customers', 0):,.0f}")
+c4.metric("Avg Order Value", f"${s.get('avg_order_value', 0):,.2f}")
+c5.metric("Units Sold", f"{s.get('total_units_sold', 0):,.0f}")
+c6.metric("Unique Products", f"{s.get('unique_products', 0):,.0f}")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -301,26 +319,26 @@ st.markdown("<br>", unsafe_allow_html=True)
 # ══════════════════════════════════════════════════════════════════════════════
 # Tabs
 # ══════════════════════════════════════════════════════════════════════════════
-tab_country, tab_products, tab_customers, tab_query = st.tabs([
-    "🌍  Revenue by Country",
-    "📦  Trending Products",
-    "👥  Customer Behavior",
-    "🔍  Custom Query",
-])
+tab_country, tab_products, tab_customers, tab_query, tab_schema = st.tabs(
+    [
+        "🌍  Revenue by Country",
+        "📦  Trending Products",
+        "👥  Customer Behavior",
+        "🔍  Custom Query",
+        "🧬  Schema & Preview",
+    ]
+)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Tab 1 — Revenue by Country
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_country:
-
     if df_country.empty:
         st.info("No country data available.")
 
     else:
-
         by_country_total = (
-            df_country
-            .groupby("country", as_index=False)["total_revenue"]
+            df_country.groupby("country", as_index=False)["total_revenue"]
             .sum()
             .sort_values("total_revenue", ascending=False)
         )
@@ -331,24 +349,15 @@ with tab_country:
         # Revenue by Country
         # ──────────────────────────────────────────────────────────────────────
         with col_a:
-
             st.subheader("Revenue by Country")
 
             fig = px.bar(
                 by_country_total.head(15),
-
                 x="total_revenue",
                 y="country",
-
                 orientation="h",
-
-                labels={
-                    "total_revenue": "Revenue ($)",
-                    "country": ""
-                },
-
+                labels={"total_revenue": "Revenue ($)", "country": ""},
                 color="total_revenue",
-
                 # darker gradient
                 color_continuous_scale=[
                     "#60a5fa",
@@ -365,19 +374,10 @@ with tab_country:
 
             fig.update_layout(
                 coloraxis_showscale=False,
-
-                margin=dict(
-                    l=0,
-                    r=0,
-                    t=10,
-                    b=0
-                ),
-
+                margin=dict(l=0, r=0, t=10, b=0),
                 plot_bgcolor="white",
                 paper_bgcolor="white",
-
                 font_family="DM Sans",
-
                 height=520,
             )
 
@@ -396,39 +396,28 @@ with tab_country:
         # Market Share
         # ──────────────────────────────────────────────────────────────────────
         with col_b:
-
             st.subheader("Market Share")
 
             top8 = by_country_total.head(8).copy()
 
-            others_rev = (
-                by_country_total
-                .iloc[8:]["total_revenue"]
-                .sum()
-            )
+            others_rev = by_country_total.iloc[8:]["total_revenue"].sum()
 
             if others_rev > 0:
                 top8 = pd.concat(
                     [
                         top8,
-                        pd.DataFrame([
-                            {
-                                "country": "Others",
-                                "total_revenue": others_rev
-                            }
-                        ])
+                        pd.DataFrame(
+                            [{"country": "Others", "total_revenue": others_rev}]
+                        ),
                     ],
-                    ignore_index=True
+                    ignore_index=True,
                 )
 
             fig2 = px.pie(
                 top8,
-
                 names="country",
                 values="total_revenue",
-
                 hole=0.45,
-
                 color_discrete_sequence=px.colors.qualitative.Bold,
             )
 
@@ -441,18 +430,9 @@ with tab_country:
 
             fig2.update_layout(
                 showlegend=False,
-
-                margin=dict(
-                    l=20,
-                    r=20,
-                    t=20,
-                    b=20
-                ),
-
+                margin=dict(l=20, r=20, t=20, b=20),
                 font_family="DM Sans",
-
                 paper_bgcolor="white",
-
                 height=520,
             )
 
@@ -471,23 +451,12 @@ with tab_country:
             fill_value=0,
         )
 
-        pivot = pivot.loc[
-            pivot.sum(axis=1)
-            .sort_values(ascending=False)
-            .index[:12]
-        ]
+        pivot = pivot.loc[pivot.sum(axis=1).sort_values(ascending=False).index[:12]]
 
         fig3 = px.imshow(
             pivot,
-
-            labels=dict(
-                x="Month",
-                y="Country",
-                color="Revenue ($)"
-            ),
-
+            labels=dict(x="Month", y="Country", color="Revenue ($)"),
             text_auto=".2s",
-
             color_continuous_scale=[
                 [0.0, "#93c5fd"],
                 [0.25, "#60a5fa"],
@@ -495,22 +464,13 @@ with tab_country:
                 [0.75, "#2563eb"],
                 [1.0, "#1e3a8a"],
             ],
-
             aspect="auto",
         )
 
         fig3.update_layout(
-            margin=dict(
-                l=0,
-                r=0,
-                t=10,
-                b=0
-            ),
-
+            margin=dict(l=0, r=0, t=10, b=0),
             font_family="DM Sans",
-
             paper_bgcolor="white",
-
             height=520,
         )
 
@@ -530,15 +490,24 @@ with tab_products:
             st.subheader(f"Top {top_n} Products by Revenue")
             fig = px.bar(
                 df_products.sort_values("total_revenue"),
-                x="total_revenue", y="product_name", orientation="h",
+                x="total_revenue",
+                y="product_name",
+                orientation="h",
                 labels={"total_revenue": "Revenue ($)", "product_name": ""},
                 color="total_revenue",
                 color_continuous_scale=["#d1fae5", "#065f46"],
-                hover_data={"times_ordered": True, "total_qty": True, "avg_price": True},
+                hover_data={
+                    "times_ordered": True,
+                    "total_qty": True,
+                    "avg_price": True,
+                },
             )
             fig.update_layout(
-                coloraxis_showscale=False, margin=dict(l=0, r=0, t=10, b=0),
-                plot_bgcolor="white", paper_bgcolor="white", font_family="DM Sans",
+                coloraxis_showscale=False,
+                margin=dict(l=0, r=0, t=10, b=0),
+                plot_bgcolor="white",
+                paper_bgcolor="white",
+                font_family="DM Sans",
             )
             fig.update_xaxes(tickprefix="$", gridcolor="#f1f5f9")
             st.plotly_chart(fig, use_container_width=True)
@@ -547,8 +516,10 @@ with tab_products:
             st.subheader("Qty vs Revenue")
             fig2 = px.scatter(
                 df_products,
-                x="total_qty", y="total_revenue",
-                size="times_ordered", color="avg_price",
+                x="total_qty",
+                y="total_revenue",
+                size="times_ordered",
+                color="avg_price",
                 hover_name="product_name",
                 labels={
                     "total_qty": "Units Sold",
@@ -560,7 +531,9 @@ with tab_products:
             )
             fig2.update_layout(
                 margin=dict(l=0, r=0, t=10, b=0),
-                plot_bgcolor="white", paper_bgcolor="white", font_family="DM Sans",
+                plot_bgcolor="white",
+                paper_bgcolor="white",
+                font_family="DM Sans",
             )
             st.plotly_chart(fig2, use_container_width=True)
 
@@ -570,16 +543,25 @@ with tab_products:
             col_t1, col_t2 = st.columns(2)
             with col_t1:
                 fig3 = go.Figure()
-                fig3.add_trace(go.Scatter(
-                    x=df_trend["year_month"], y=df_trend["total_revenue"],
-                    mode="lines+markers", name="Revenue",
-                    line=dict(color="#059669", width=2),
-                    marker=dict(size=6),
-                    fill="tozeroy", fillcolor="rgba(5,150,105,0.08)",
-                ))
+                fig3.add_trace(
+                    go.Scatter(
+                        x=df_trend["year_month"],
+                        y=df_trend["total_revenue"],
+                        mode="lines+markers",
+                        name="Revenue",
+                        line=dict(color="#059669", width=2),
+                        marker=dict(size=6),
+                        fill="tozeroy",
+                        fillcolor="rgba(5,150,105,0.08)",
+                    )
+                )
                 fig3.update_layout(
-                    title="Monthly Revenue", xaxis_title="Month", yaxis_title="Revenue ($)",
-                    plot_bgcolor="white", paper_bgcolor="white", font_family="DM Sans",
+                    title="Monthly Revenue",
+                    xaxis_title="Month",
+                    yaxis_title="Revenue ($)",
+                    plot_bgcolor="white",
+                    paper_bgcolor="white",
+                    font_family="DM Sans",
                     margin=dict(l=0, r=0, t=40, b=0),
                 )
                 fig3.update_yaxes(tickprefix="$", gridcolor="#f1f5f9")
@@ -587,13 +569,21 @@ with tab_products:
 
             with col_t2:
                 fig4 = go.Figure()
-                fig4.add_trace(go.Bar(
-                    x=df_trend["year_month"], y=df_trend["total_orders"],
-                    marker_color="#6ee7b7", name="Orders",
-                ))
+                fig4.add_trace(
+                    go.Bar(
+                        x=df_trend["year_month"],
+                        y=df_trend["total_orders"],
+                        marker_color="#6ee7b7",
+                        name="Orders",
+                    )
+                )
                 fig4.update_layout(
-                    title="Monthly Orders", xaxis_title="Month", yaxis_title="Orders",
-                    plot_bgcolor="white", paper_bgcolor="white", font_family="DM Sans",
+                    title="Monthly Orders",
+                    xaxis_title="Month",
+                    yaxis_title="Orders",
+                    plot_bgcolor="white",
+                    paper_bgcolor="white",
+                    font_family="DM Sans",
                     margin=dict(l=0, r=0, t=40, b=0),
                 )
                 fig4.update_yaxes(gridcolor="#f1f5f9")
@@ -602,12 +592,18 @@ with tab_products:
         # Product table
         with st.expander("📋 Full product table"):
             st.dataframe(
-                df_products.rename(columns={
-                    "stock_code": "Code", "product_name": "Product",
-                    "times_ordered": "Orders", "total_qty": "Units",
-                    "total_revenue": "Revenue ($)", "avg_price": "Avg Price ($)",
-                }),
-                use_container_width=True, hide_index=True,
+                df_products.rename(
+                    columns={
+                        "stock_code": "Code",
+                        "product_name": "Product",
+                        "times_ordered": "Orders",
+                        "total_qty": "Units",
+                        "total_revenue": "Revenue ($)",
+                        "avg_price": "Avg Price ($)",
+                    }
+                ),
+                use_container_width=True,
+                hide_index=True,
             )
 
 
@@ -624,8 +620,10 @@ with tab_customers:
             st.subheader("Spend vs Order Frequency")
             fig = px.scatter(
                 df_customers,
-                x="order_frequency", y="total_spend",
-                color="country", hover_name="customer_id",
+                x="order_frequency",
+                y="total_spend",
+                color="country",
+                hover_name="customer_id",
                 size="total_units",
                 labels={
                     "order_frequency": "Number of Orders",
@@ -635,7 +633,9 @@ with tab_customers:
                 color_discrete_sequence=px.colors.qualitative.Set2,
             )
             fig.update_layout(
-                plot_bgcolor="white", paper_bgcolor="white", font_family="DM Sans",
+                plot_bgcolor="white",
+                paper_bgcolor="white",
+                font_family="DM Sans",
                 margin=dict(l=0, r=0, t=10, b=0),
             )
             fig.update_yaxes(tickprefix="$", gridcolor="#f1f5f9")
@@ -652,14 +652,21 @@ with tab_customers:
                 df_spend_dist = df_spend_dist.sort_values("spend_bucket")
                 fig2 = px.bar(
                     df_spend_dist,
-                    x="spend_bucket", y="customer_count",
-                    labels={"spend_bucket": "Spend Tier", "customer_count": "# Customers"},
+                    x="spend_bucket",
+                    y="customer_count",
+                    labels={
+                        "spend_bucket": "Spend Tier",
+                        "customer_count": "# Customers",
+                    },
                     color="customer_count",
                     color_continuous_scale=["#fef3c7", "#d97706"],
                 )
                 fig2.update_layout(
-                    coloraxis_showscale=False, plot_bgcolor="white", paper_bgcolor="white",
-                    font_family="DM Sans", margin=dict(l=0, r=0, t=10, b=0),
+                    coloraxis_showscale=False,
+                    plot_bgcolor="white",
+                    paper_bgcolor="white",
+                    font_family="DM Sans",
+                    margin=dict(l=0, r=0, t=10, b=0),
                 )
                 fig2.update_yaxes(gridcolor="#f1f5f9")
                 st.plotly_chart(fig2, use_container_width=True)
@@ -667,13 +674,18 @@ with tab_customers:
         # Avg order value distribution
         st.subheader("Avg Order Value Distribution")
         fig3 = px.histogram(
-            df_customers, x="avg_order_value", nbins=30,
+            df_customers,
+            x="avg_order_value",
+            nbins=30,
             labels={"avg_order_value": "Avg Order Value ($)", "count": "Customers"},
             color_discrete_sequence=["#7c3aed"],
         )
         fig3.update_layout(
-            plot_bgcolor="white", paper_bgcolor="white", font_family="DM Sans",
-            margin=dict(l=0, r=0, t=10, b=0), bargap=0.05,
+            plot_bgcolor="white",
+            paper_bgcolor="white",
+            font_family="DM Sans",
+            margin=dict(l=0, r=0, t=10, b=0),
+            bargap=0.05,
         )
         fig3.update_xaxes(tickprefix="$", gridcolor="#f1f5f9")
         fig3.update_yaxes(gridcolor="#f1f5f9")
@@ -682,13 +694,20 @@ with tab_customers:
         # Top 20 customers table
         with st.expander("🏆 Top customers"):
             st.dataframe(
-                df_customers.head(20).rename(columns={
-                    "customer_id": "Customer ID", "country": "Country",
-                    "order_frequency": "Orders", "total_units": "Units",
-                    "total_spend": "Total Spend ($)", "avg_order_value": "Avg Order ($)",
-                    "first_purchase_month": "First Purchase", "last_purchase_month": "Last Purchase",
-                }),
-                use_container_width=True, hide_index=True,
+                df_customers.head(20).rename(
+                    columns={
+                        "customer_id": "Customer ID",
+                        "country": "Country",
+                        "order_frequency": "Orders",
+                        "total_units": "Units",
+                        "total_spend": "Total Spend ($)",
+                        "avg_order_value": "Avg Order ($)",
+                        "first_purchase_month": "First Purchase",
+                        "last_purchase_month": "Last Purchase",
+                    }
+                ),
+                use_container_width=True,
+                hide_index=True,
             )
 
 
@@ -711,11 +730,15 @@ LIMIT 10"""
         with st.spinner("Running on Athena…"):
             try:
                 url = (api_input or API_URL).rstrip("/")
-                r   = requests.post(url, json={"action": "custom", "sql": sql_input}, timeout=60)
+                r = requests.post(
+                    url, json={"action": "custom", "sql": sql_input}, timeout=60
+                )
                 r.raise_for_status()
                 result = r.json()
                 df_custom = pd.DataFrame(result.get("data", []))
-                st.success(f"{result.get('row_count', 0)} rows — {result.get('queried_at','')}")
+                st.success(
+                    f"{result.get('row_count', 0)} rows — {result.get('queried_at', '')}"
+                )
                 st.dataframe(df_custom, use_container_width=True)
 
                 # Auto-chart if 2 numeric-ish cols
@@ -725,11 +748,68 @@ LIMIT 10"""
                         df_custom[col_y] = pd.to_numeric(df_custom[col_y])
                         fig = px.bar(df_custom, x=col_x, y=col_y)
                         fig.update_layout(
-                            plot_bgcolor="white", paper_bgcolor="white",
-                            font_family="DM Sans", margin=dict(l=0, r=0, t=10, b=0),
+                            plot_bgcolor="white",
+                            paper_bgcolor="white",
+                            font_family="DM Sans",
+                            margin=dict(l=0, r=0, t=10, b=0),
                         )
                         st.plotly_chart(fig, use_container_width=True)
                     except Exception:
                         pass
             except Exception as exc:
                 st.error(f"Query failed: {exc}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Tab 5 — Schema & Preview
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_schema:
+    url = (api_input or API_URL).rstrip("/")
+
+    col_s1, col_s2 = st.columns([1, 2])
+
+    with col_s1:
+        st.subheader("Table Schema")
+        st.caption("Live view of Glue catalog columns — updates after schema evolution.")
+        if st.button("🔄 Refresh Schema", key="refresh_schema"):
+            st.cache_data.clear()
+        try:
+            r = requests.post(
+                url,
+                json={"action": "custom", "sql": "DESCRIBE retail_transactions"},
+                timeout=30,
+            )
+            r.raise_for_status()
+            df_schema = pd.DataFrame(r.json().get("data", []))
+            if not df_schema.empty:
+                st.dataframe(df_schema, use_container_width=True, hide_index=True)
+                st.caption(f"{len(df_schema)} columns")
+            else:
+                st.info("No schema data returned.")
+        except Exception as exc:
+            st.error(f"Schema load failed: {exc}")
+
+    with col_s2:
+        st.subheader("Data Preview")
+        st.caption("SELECT * — spot-check new columns after schema evolution.")
+        preview_limit = st.slider("Rows", min_value=5, max_value=20, value=10, key="preview_limit")
+        if st.button("▶  Load Preview", key="run_preview"):
+            try:
+                r = requests.post(
+                    url,
+                    json={
+                        "action": "custom",
+                        "sql": f"SELECT * FROM retail_transactions LIMIT {preview_limit}",
+                    },
+                    timeout=60,
+                )
+                r.raise_for_status()
+                result = r.json()
+                df_preview = pd.DataFrame(result.get("data", []))
+                if df_preview.empty:
+                    st.info("No data found.")
+                else:
+                    st.success(f"{len(df_preview)} rows — {result.get('queried_at', '')}")
+                    st.dataframe(df_preview, use_container_width=True, hide_index=True)
+            except Exception as exc:
+                st.error(f"Preview failed: {exc}")
