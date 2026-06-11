@@ -16,7 +16,7 @@ import streamlit as st
 # ══════════════════════════════════════════════════════════════════════════════
 # Config & page setup
 # ══════════════════════════════════════════════════════════════════════════════
-API_URL = os.environ.get("ATHENA_API_URL", "your-api-url").rstrip("/")
+API_URL = st.secrets["API_URL"].rstrip("/")
 
 st.set_page_config(
     page_title="Retail Intelligence",
