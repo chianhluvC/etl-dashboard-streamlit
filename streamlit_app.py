@@ -740,10 +740,10 @@ with tab_schema:
                 n = min(2, len(df_schema.columns))
                 df_schema = df_schema.iloc[:, :n].copy()
                 df_schema.columns = ["col_name", "data_type"][:n]
-                # Remove Athena partition-info separator rows ("# Partition Information")
+                # Remove separator rows and deduplicate (partition cols appear twice in DESCRIBE)
                 df_schema = df_schema[
                     ~df_schema["col_name"].fillna("").astype(str).str.startswith("#")
-                ].reset_index(drop=True)
+                ].drop_duplicates(subset=["col_name"]).reset_index(drop=True)
             if not df_schema.empty:
                 st.caption(f"{len(df_schema)} columns")
                 event = st.dataframe(
