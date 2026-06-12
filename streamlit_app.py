@@ -228,6 +228,23 @@ def load_spend_distribution():
     return to_num(df, ["customer_count", "avg_spend"])
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def _load_schema(url: str) -> pd.DataFrame:
+    r = requests.post(url, json={"action": "describe_schema"}, timeout=30)
+    r.raise_for_status()
+    df = pd.DataFrame(r.json().get("data", []))
+    if df.empty:
+        return df
+    n = min(2, len(df.columns))
+    df = df.iloc[:, :n].copy()
+    df.columns = ["Column", "Type"][:n]
+    return (
+        df[~df["Column"].fillna("").astype(str).str.startswith("#")]
+        .drop_duplicates(subset=["Column"])
+        .reset_index(drop=True)
+    )
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Parallel loading with single cache entry
 # ──────────────────────────────────────────────────────────────────────────────
@@ -714,6 +731,7 @@ with tab_customers:
 # Tab 4 — Schema & Preview
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_schema:
+    _PAGE_SIZE = 20
     url = (api_input or API_URL).rstrip("/")
 
     col_s1, col_s2 = st.columns([1, 2])
@@ -724,16 +742,8 @@ with tab_schema:
         if st.button("🔄 Refresh", key="refresh_schema"):
             st.cache_data.clear()
         try:
-            r = requests.post(url, json={"action": "describe_schema"}, timeout=30)
-            r.raise_for_status()
-            df_schema = pd.DataFrame(r.json().get("data", []))
+            df_schema = _load_schema(url)
             if not df_schema.empty:
-                n = min(2, len(df_schema.columns))
-                df_schema = df_schema.iloc[:, :n].copy()
-                df_schema.columns = ["Column", "Type"][:n]
-                df_schema = df_schema[
-                    ~df_schema["Column"].fillna("").astype(str).str.startswith("#")
-                ].drop_duplicates(subset=["Column"]).reset_index(drop=True)
                 st.caption(f"{len(df_schema)} columns")
                 st.dataframe(df_schema, use_container_width=True, hide_index=True)
             else:
@@ -742,10 +752,11 @@ with tab_schema:
             st.error(f"Schema load failed: {exc}")
 
     with col_s2:
-        _PAGE_SIZE = 20
-
         st.subheader("Latest Rows")
-        st.caption("75% newest partition + 25% oldest — spot-check schema evolution.")
+        st.caption(
+            "75% newest partition + 25% oldest — shows both new (non-null) "
+            "and legacy (null) values for evolved columns."
+        )
 
         if st.button("▶  Load 100 rows", key="run_preview"):
             try:
@@ -758,7 +769,6 @@ with tab_schema:
                 result2 = r2.json()
                 st.session_state["preview_df"] = pd.DataFrame(result2.get("data", []))
                 st.session_state["preview_ts"] = result2.get("queried_at", "")
-                st.session_state["preview_page"] = 0
             except Exception as exc:
                 st.error(f"Preview failed: {exc}")
 
@@ -766,23 +776,21 @@ with tab_schema:
         if not _df.empty:
             _total = len(_df)
             _total_pages = max(1, (_total + _PAGE_SIZE - 1) // _PAGE_SIZE)
-            _page = max(0, min(st.session_state.get("preview_page", 0), _total_pages - 1))
-            _start, _end = _page * _PAGE_SIZE, min((_page + 1) * _PAGE_SIZE, _total)
 
-            c_prev, c_info, c_next = st.columns([1, 5, 1])
-            with c_prev:
-                if st.button("← Prev", key="prev_page", disabled=(_page == 0)):
-                    st.session_state["preview_page"] = _page - 1
-                    st.rerun()
+            c_info, c_nav = st.columns([4, 1])
             with c_info:
-                st.caption(
-                    f"Rows {_start + 1}–{_end} of {_total}  ·  "
-                    f"page {_page + 1}/{_total_pages}  ·  "
-                    f"{st.session_state.get('preview_ts', '')}"
+                st.caption(f"{_total} rows  ·  {st.session_state.get('preview_ts', '')}")
+            with c_nav:
+                _page_1 = st.number_input(
+                    f"Page (1–{_total_pages})",
+                    min_value=1, max_value=_total_pages, value=1, step=1,
+                    key="preview_page_num",
                 )
-            with c_next:
-                if st.button("Next →", key="next_page", disabled=(_page >= _total_pages - 1)):
-                    st.session_state["preview_page"] = _page + 1
-                    st.rerun()
+
+            _page = _page_1 - 1
+            _start = _page * _PAGE_SIZE
+            _end = min(_start + _PAGE_SIZE, _total)
+            st.caption(f"Rows {_start + 1}–{_end}  ·  page {_page_1}/{_total_pages}")
+            st.dataframe(_df.iloc[_start:_end], use_container_width=True, hide_index=True)
 
             st.dataframe(_df.iloc[_start:_end], use_container_width=True, hide_index=True)
