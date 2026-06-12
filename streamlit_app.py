@@ -313,7 +313,8 @@ if not df_summary.empty:
         "total_units_sold",
         "unique_products",
     ]:
-        s[col] = pd.to_numeric(row.get(col, 0), errors="coerce") or 0
+        val = pd.to_numeric(row.get(col, 0), errors="coerce")
+        s[col] = 0 if pd.isna(val) else val
 
 
 # ══════════════════════════════════════════════════════════════════════════════
