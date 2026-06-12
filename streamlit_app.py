@@ -718,75 +718,71 @@ with tab_schema:
 
     col_s1, col_s2 = st.columns([1, 2])
 
-    df_schema = pd.DataFrame()
-    selected_rows: list[int] = []
-
     with col_s1:
         st.subheader("Table Schema")
-        st.caption("Click a row to preview non-null values for that column.")
-        if st.button("🔄 Refresh Schema", key="refresh_schema"):
+        st.caption("Live Glue catalog — updates after schema evolution.")
+        if st.button("🔄 Refresh", key="refresh_schema"):
             st.cache_data.clear()
         try:
-            r = requests.post(
-                url,
-                json={"action": "describe_schema"},
-                timeout=30,
-            )
+            r = requests.post(url, json={"action": "describe_schema"}, timeout=30)
             r.raise_for_status()
             df_schema = pd.DataFrame(r.json().get("data", []))
             if not df_schema.empty:
-                # Take first 2 columns by position — works for both Athena engine
-                # v2 ("col_name"/"data_type") and v3 ("Column"/"Type")
                 n = min(2, len(df_schema.columns))
                 df_schema = df_schema.iloc[:, :n].copy()
-                df_schema.columns = ["col_name", "data_type"][:n]
-                # Remove separator rows and deduplicate (partition cols appear twice in DESCRIBE)
+                df_schema.columns = ["Column", "Type"][:n]
                 df_schema = df_schema[
-                    ~df_schema["col_name"].fillna("").astype(str).str.startswith("#")
-                ].drop_duplicates(subset=["col_name"]).reset_index(drop=True)
-            if not df_schema.empty:
+                    ~df_schema["Column"].fillna("").astype(str).str.startswith("#")
+                ].drop_duplicates(subset=["Column"]).reset_index(drop=True)
                 st.caption(f"{len(df_schema)} columns")
-                event = st.dataframe(
-                    df_schema,
-                    on_select="rerun",
-                    selection_mode="single-row",
-                    use_container_width=True,
-                    hide_index=True,
-                )
-                selected_rows = event.selection.rows
+                st.dataframe(df_schema, use_container_width=True, hide_index=True)
             else:
-                st.info("No schema data returned.")
+                st.info("No schema data.")
         except Exception as exc:
             st.error(f"Schema load failed: {exc}")
 
     with col_s2:
-        if selected_rows and not df_schema.empty:
-            col_name = df_schema.iloc[selected_rows[0]]["col_name"]
-            st.subheader(f"`{col_name}`")
-            st.caption(f"Rows where `{col_name}` IS NOT NULL")
-            preview_limit = st.slider(
-                "Rows", min_value=5, max_value=20, value=10, key="col_preview_limit"
-            )
+        _PAGE_SIZE = 20
+
+        st.subheader("Latest Rows")
+        st.caption("75% newest partition + 25% oldest — spot-check schema evolution.")
+
+        if st.button("▶  Load 100 rows", key="run_preview"):
             try:
                 r2 = requests.post(
                     url,
-                    json={"action": "column_preview", "column": col_name, "limit": preview_limit},
+                    json={"action": "preview_data", "limit": 100},
                     timeout=60,
                 )
                 r2.raise_for_status()
                 result2 = r2.json()
-                df_col = pd.DataFrame(result2.get("data", []))
-                if df_col.empty:
-                    st.info(f"No non-null rows found for `{col_name}`.")
-                else:
-                    st.caption(f"{len(df_col)} rows — {result2.get('queried_at', '')}")
-                    styled = df_col.style.set_properties(
-                        **{"background-color": "rgba(250, 200, 50, 0.25)"},
-                        subset=[col_name] if col_name in df_col.columns else [],
-                    )
-                    st.dataframe(styled, use_container_width=True, hide_index=True)
+                st.session_state["preview_df"] = pd.DataFrame(result2.get("data", []))
+                st.session_state["preview_ts"] = result2.get("queried_at", "")
+                st.session_state["preview_page"] = 0
             except Exception as exc:
-                st.error(f"Column preview failed: {exc}")
-        else:
-            st.subheader("Column Preview")
-            st.caption("← Select a column from the schema list to inspect non-null rows.")
+                st.error(f"Preview failed: {exc}")
+
+        _df = st.session_state.get("preview_df", pd.DataFrame())
+        if not _df.empty:
+            _total = len(_df)
+            _total_pages = max(1, (_total + _PAGE_SIZE - 1) // _PAGE_SIZE)
+            _page = max(0, min(st.session_state.get("preview_page", 0), _total_pages - 1))
+            _start, _end = _page * _PAGE_SIZE, min((_page + 1) * _PAGE_SIZE, _total)
+
+            c_prev, c_info, c_next = st.columns([1, 5, 1])
+            with c_prev:
+                if st.button("← Prev", key="prev_page", disabled=(_page == 0)):
+                    st.session_state["preview_page"] = _page - 1
+                    st.rerun()
+            with c_info:
+                st.caption(
+                    f"Rows {_start + 1}–{_end} of {_total}  ·  "
+                    f"page {_page + 1}/{_total_pages}  ·  "
+                    f"{st.session_state.get('preview_ts', '')}"
+                )
+            with c_next:
+                if st.button("Next →", key="next_page", disabled=(_page >= _total_pages - 1)):
+                    st.session_state["preview_page"] = _page + 1
+                    st.rerun()
+
+            st.dataframe(_df.iloc[_start:_end], use_container_width=True, hide_index=True)
