@@ -302,6 +302,13 @@ with st.spinner("Loading data from Athena…"):
     df_spend_dist = _data["spend_dist"]
 
 # coerce summary row
+def _kpi(val, default=0):
+    try:
+        v = float(val)
+        return default if (v != v) else v  # v != v is True only for NaN
+    except (TypeError, ValueError):
+        return default
+
 s = {}
 if not df_summary.empty:
     row = df_summary.iloc[0]
@@ -313,8 +320,7 @@ if not df_summary.empty:
         "total_units_sold",
         "unique_products",
     ]:
-        val = pd.to_numeric(row.get(col, 0), errors="coerce")
-        s[col] = 0 if pd.isna(val) else val
+        s[col] = _kpi(row.get(col))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -324,12 +330,12 @@ st.markdown("# Retail Intelligence")
 
 
 c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.metric("Total Revenue", f"${s.get('total_revenue', 0):,.0f}")
-c2.metric("Total Orders", f"{s.get('total_orders', 0):,.0f}")
-c3.metric("Unique Customers", f"{s.get('unique_customers', 0):,.0f}")
-c4.metric("Avg Order Value", f"${s.get('avg_order_value', 0):,.2f}")
-c5.metric("Units Sold", f"{s.get('total_units_sold', 0):,.0f}")
-c6.metric("Unique Products", f"{s.get('unique_products', 0):,.0f}")
+c1.metric("Total Revenue",    f"${_kpi(s.get('total_revenue')):,.0f}")
+c2.metric("Total Orders",     f"{_kpi(s.get('total_orders')):,.0f}")
+c3.metric("Unique Customers", f"{_kpi(s.get('unique_customers')):,.0f}")
+c4.metric("Avg Order Value",  f"${_kpi(s.get('avg_order_value')):,.2f}")
+c5.metric("Units Sold",       f"{_kpi(s.get('total_units_sold')):,.0f}")
+c6.metric("Unique Products",  f"{_kpi(s.get('unique_products')):,.0f}")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
