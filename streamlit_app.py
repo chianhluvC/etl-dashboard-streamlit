@@ -792,5 +792,3 @@ with tab_schema:
             _end = min(_start + _PAGE_SIZE, _total)
             st.caption(f"Rows {_start + 1}–{_end}  ·  page {_page_1}/{_total_pages}")
             st.dataframe(_df.iloc[_start:_end], use_container_width=True, hide_index=True)
-
-            st.dataframe(_df.iloc[_start:_end], use_container_width=True, hide_index=True)
