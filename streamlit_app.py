@@ -319,12 +319,11 @@ st.markdown("<br>", unsafe_allow_html=True)
 # ══════════════════════════════════════════════════════════════════════════════
 # Tabs
 # ══════════════════════════════════════════════════════════════════════════════
-tab_country, tab_products, tab_customers, tab_query, tab_schema = st.tabs(
+tab_country, tab_products, tab_customers, tab_schema = st.tabs(
     [
         "🌍  Revenue by Country",
         "📦  Trending Products",
         "👥  Customer Behavior",
-        "🔍  Custom Query",
         "🧬  Schema & Preview",
     ]
 )
@@ -712,56 +711,7 @@ with tab_customers:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Tab 4 — Custom Athena Query
-# ══════════════════════════════════════════════════════════════════════════════
-with tab_query:
-    st.subheader("Custom Athena Query")
-    st.caption("Queries run directly against your Glue catalog via the Lambda API.")
-
-    default_sql = """SELECT country, SUM(total_amount) AS revenue
-FROM retail_transactions
-GROUP BY country
-ORDER BY revenue DESC
-LIMIT 10"""
-
-    sql_input = st.text_area("SQL", value=default_sql, height=160, key="custom_sql")
-
-    if st.button("▶  Run Query", type="primary"):
-        with st.spinner("Running on Athena…"):
-            try:
-                url = (api_input or API_URL).rstrip("/")
-                r = requests.post(
-                    url, json={"action": "custom", "sql": sql_input}, timeout=60
-                )
-                r.raise_for_status()
-                result = r.json()
-                df_custom = pd.DataFrame(result.get("data", []))
-                st.success(
-                    f"{result.get('row_count', 0)} rows — {result.get('queried_at', '')}"
-                )
-                st.dataframe(df_custom, use_container_width=True)
-
-                # Auto-chart if 2 numeric-ish cols
-                if len(df_custom.columns) == 2:
-                    col_x, col_y = df_custom.columns
-                    try:
-                        df_custom[col_y] = pd.to_numeric(df_custom[col_y])
-                        fig = px.bar(df_custom, x=col_x, y=col_y)
-                        fig.update_layout(
-                            plot_bgcolor="white",
-                            paper_bgcolor="white",
-                            font_family="DM Sans",
-                            margin=dict(l=0, r=0, t=10, b=0),
-                        )
-                        st.plotly_chart(fig, use_container_width=True)
-                    except Exception:
-                        pass
-            except Exception as exc:
-                st.error(f"Query failed: {exc}")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Tab 5 — Schema & Preview
+# Tab 4 — Schema & Preview
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_schema:
     url = (api_input or API_URL).rstrip("/")
@@ -770,13 +720,15 @@ with tab_schema:
 
     with col_s1:
         st.subheader("Table Schema")
-        st.caption("Live view of Glue catalog columns — updates after schema evolution.")
+        st.caption(
+            "Live view of Glue catalog columns — updates after schema evolution."
+        )
         if st.button("🔄 Refresh Schema", key="refresh_schema"):
             st.cache_data.clear()
         try:
             r = requests.post(
                 url,
-                json={"action": "custom", "sql": "DESCRIBE retail_transactions"},
+                json={"action": "describe_schema"},
                 timeout=30,
             )
             r.raise_for_status()
@@ -792,15 +744,14 @@ with tab_schema:
     with col_s2:
         st.subheader("Data Preview")
         st.caption("SELECT * — spot-check new columns after schema evolution.")
-        preview_limit = st.slider("Rows", min_value=5, max_value=20, value=10, key="preview_limit")
+        preview_limit = st.slider(
+            "Rows", min_value=5, max_value=20, value=10, key="preview_limit"
+        )
         if st.button("▶  Load Preview", key="run_preview"):
             try:
                 r = requests.post(
                     url,
-                    json={
-                        "action": "custom",
-                        "sql": f"SELECT * FROM retail_transactions LIMIT {preview_limit}",
-                    },
+                    json={"action": "preview_data", "limit": preview_limit},
                     timeout=60,
                 )
                 r.raise_for_status()
@@ -809,7 +760,9 @@ with tab_schema:
                 if df_preview.empty:
                     st.info("No data found.")
                 else:
-                    st.success(f"{len(df_preview)} rows — {result.get('queried_at', '')}")
+                    st.success(
+                        f"{len(df_preview)} rows — {result.get('queried_at', '')}"
+                    )
                     st.dataframe(df_preview, use_container_width=True, hide_index=True)
             except Exception as exc:
                 st.error(f"Preview failed: {exc}")
