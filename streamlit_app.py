@@ -735,18 +735,15 @@ with tab_schema:
             r.raise_for_status()
             df_schema = pd.DataFrame(r.json().get("data", []))
             if not df_schema.empty:
-                # Normalize column names:
-                # Athena engine v2 (Presto) → "col_name" / "data_type"
-                # Athena engine v3 (Trino)  → "Column"   / "Type"
-                name_col = "col_name" if "col_name" in df_schema.columns else df_schema.columns[0]
-                type_col = "data_type" if "data_type" in df_schema.columns else (
-                    df_schema.columns[1] if len(df_schema.columns) > 1 else df_schema.columns[0]
-                )
-                df_schema = df_schema.rename(columns={name_col: "col_name", type_col: "data_type"})
-                # Filter out partition-info separator rows (Athena inserts "# Partition Information")
+                # Take first 2 columns by position — works for both Athena engine
+                # v2 ("col_name"/"data_type") and v3 ("Column"/"Type")
+                n = min(2, len(df_schema.columns))
+                df_schema = df_schema.iloc[:, :n].copy()
+                df_schema.columns = ["col_name", "data_type"][:n]
+                # Remove Athena partition-info separator rows ("# Partition Information")
                 df_schema = df_schema[
-                    ~df_schema["col_name"].fillna("").str.startswith("#")
-                ][["col_name", "data_type"]].reset_index(drop=True)
+                    ~df_schema["col_name"].fillna("").astype(str).str.startswith("#")
+                ].reset_index(drop=True)
             if not df_schema.empty:
                 st.caption(f"{len(df_schema)} columns")
                 event = st.dataframe(
