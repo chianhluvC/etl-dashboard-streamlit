@@ -734,10 +734,18 @@ with tab_schema:
             )
             r.raise_for_status()
             df_schema = pd.DataFrame(r.json().get("data", []))
-            # Filter out Athena's partition-info separator rows (col_name starts with #)
-            if not df_schema.empty and "col_name" in df_schema.columns:
+            if not df_schema.empty:
+                # Normalize column names:
+                # Athena engine v2 (Presto) → "col_name" / "data_type"
+                # Athena engine v3 (Trino)  → "Column"   / "Type"
+                name_col = "col_name" if "col_name" in df_schema.columns else df_schema.columns[0]
+                type_col = "data_type" if "data_type" in df_schema.columns else (
+                    df_schema.columns[1] if len(df_schema.columns) > 1 else df_schema.columns[0]
+                )
+                df_schema = df_schema.rename(columns={name_col: "col_name", type_col: "data_type"})
+                # Filter out partition-info separator rows (Athena inserts "# Partition Information")
                 df_schema = df_schema[
-                    ~df_schema["col_name"].str.startswith("#")
+                    ~df_schema["col_name"].fillna("").str.startswith("#")
                 ][["col_name", "data_type"]].reset_index(drop=True)
             if not df_schema.empty:
                 st.caption(f"{len(df_schema)} columns")
