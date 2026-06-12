@@ -718,11 +718,12 @@ with tab_schema:
 
     col_s1, col_s2 = st.columns([1, 2])
 
+    df_schema = pd.DataFrame()
+    selected_rows: list[int] = []
+
     with col_s1:
         st.subheader("Table Schema")
-        st.caption(
-            "Live view of Glue catalog columns — updates after schema evolution."
-        )
+        st.caption("Click a row to preview non-null values for that column.")
         if st.button("🔄 Refresh Schema", key="refresh_schema"):
             st.cache_data.clear()
         try:
@@ -733,36 +734,54 @@ with tab_schema:
             )
             r.raise_for_status()
             df_schema = pd.DataFrame(r.json().get("data", []))
+            # Filter out Athena's partition-info separator rows (col_name starts with #)
+            if not df_schema.empty and "col_name" in df_schema.columns:
+                df_schema = df_schema[
+                    ~df_schema["col_name"].str.startswith("#")
+                ][["col_name", "data_type"]].reset_index(drop=True)
             if not df_schema.empty:
-                st.dataframe(df_schema, use_container_width=True, hide_index=True)
                 st.caption(f"{len(df_schema)} columns")
+                event = st.dataframe(
+                    df_schema,
+                    on_select="rerun",
+                    selection_mode="single-row",
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                selected_rows = event.selection.rows
             else:
                 st.info("No schema data returned.")
         except Exception as exc:
             st.error(f"Schema load failed: {exc}")
 
     with col_s2:
-        st.subheader("Data Preview")
-        st.caption("SELECT * — spot-check new columns after schema evolution.")
-        preview_limit = st.slider(
-            "Rows", min_value=5, max_value=20, value=10, key="preview_limit"
-        )
-        if st.button("▶  Load Preview", key="run_preview"):
+        if selected_rows and not df_schema.empty:
+            col_name = df_schema.iloc[selected_rows[0]]["col_name"]
+            st.subheader(f"`{col_name}`")
+            st.caption(f"Rows where `{col_name}` IS NOT NULL")
+            preview_limit = st.slider(
+                "Rows", min_value=5, max_value=20, value=10, key="col_preview_limit"
+            )
             try:
-                r = requests.post(
+                r2 = requests.post(
                     url,
-                    json={"action": "preview_data", "limit": preview_limit},
+                    json={"action": "column_preview", "column": col_name, "limit": preview_limit},
                     timeout=60,
                 )
-                r.raise_for_status()
-                result = r.json()
-                df_preview = pd.DataFrame(result.get("data", []))
-                if df_preview.empty:
-                    st.info("No data found.")
+                r2.raise_for_status()
+                result2 = r2.json()
+                df_col = pd.DataFrame(result2.get("data", []))
+                if df_col.empty:
+                    st.info(f"No non-null rows found for `{col_name}`.")
                 else:
-                    st.success(
-                        f"{len(df_preview)} rows — {result.get('queried_at', '')}"
+                    st.caption(f"{len(df_col)} rows — {result2.get('queried_at', '')}")
+                    styled = df_col.style.set_properties(
+                        **{"background-color": "rgba(250, 200, 50, 0.25)"},
+                        subset=[col_name] if col_name in df_col.columns else [],
                     )
-                    st.dataframe(df_preview, use_container_width=True, hide_index=True)
+                    st.dataframe(styled, use_container_width=True, hide_index=True)
             except Exception as exc:
-                st.error(f"Preview failed: {exc}")
+                st.error(f"Column preview failed: {exc}")
+        else:
+            st.subheader("Column Preview")
+            st.caption("← Select a column from the schema list to inspect non-null rows.")
